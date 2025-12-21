@@ -11,6 +11,8 @@ REALM_BIN="/usr/local/bin/realm"
 CONFIG_FILE="/root/realm.toml"
 SYSTEMD_FILE="/etc/systemd/system/realm.service"
 OPENRC_FILE="/etc/init.d/realm"
+SHORTCUT_PATH="/usr/bin/realm-helper"
+UPDATE_URL="https://raw.githubusercontent.com/RomanovCaesar/realm-helper/main/realm_helper.sh"
 
 # 检查是否为 root 用户
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}" && exit 1
@@ -39,6 +41,17 @@ check_dependencies() {
         if ! command -v tar &> /dev/null; then
             apk add tar
         fi
+    fi
+}
+
+# 检查并安装快捷方式
+check_shortcut() {
+    # 如果快捷方式不存在，或者当前运行的脚本不是快捷方式本身（确保更新逻辑能同步到快捷方式）
+    if [ ! -f "$SHORTCUT_PATH" ] || [[ "$(realpath "$0")" != "$(realpath "$SHORTCUT_PATH")" ]]; then
+        cp "$0" "$SHORTCUT_PATH"
+        chmod +x "$SHORTCUT_PATH"
+        # 只有在首次创建时提示
+        # echo -e "${GREEN}快捷方式已添加！以后输入 realm-helper 即可启动本脚本。${PLAIN}"
     fi
 }
 
@@ -373,6 +386,7 @@ uninstall_realm() {
         fi
         
         rm -f "$REALM_BIN"
+        rm -f "$SHORTCUT_PATH"
         
         echo -e "${GREEN}Realm 程序及服务已卸载。${PLAIN}"
         read -p "是否保留配置文件 ($CONFIG_FILE)? [y/n]: " keep_conf
@@ -388,6 +402,40 @@ uninstall_realm() {
     wait_for_key
 }
 
+# 更新脚本
+update_script() {
+    echo -e "${GREEN}正在检查脚本更新...${PLAIN}"
+    # 下载到临时文件
+    curl -L -o /tmp/realm_helper_new.sh "$UPDATE_URL"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}更新失败，无法连接到 GitHub。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    # 简单检查文件有效性
+    if ! grep -q "#!/bin/bash" /tmp/realm_helper_new.sh; then
+        echo -e "${RED}下载的文件无效，请检查 URL 或网络。${PLAIN}"
+        rm -f /tmp/realm_helper_new.sh
+        wait_for_key
+        return
+    fi
+
+    # 覆盖当前脚本
+    mv /tmp/realm_helper_new.sh "$0"
+    chmod +x "$0"
+    
+    # 同时也更新快捷方式（如果当前运行的不是快捷方式）
+    if [[ "$(realpath "$0")" != "$(realpath "$SHORTCUT_PATH")" ]]; then
+        cp "$0" "$SHORTCUT_PATH"
+        chmod +x "$SHORTCUT_PATH"
+    fi
+
+    echo -e "${GREEN}脚本更新成功！正在重启脚本...${PLAIN}"
+    sleep 2
+    exec "$0"
+}
+
 # 主菜单
 main_menu() {
     clear
@@ -398,6 +446,7 @@ main_menu() {
     echo -e "################################################"
     echo -e "Realm 安装状态: ${INSTALL_STATUS}"
     echo -e "Realm 运行状态: ${RUN_STATUS}"
+    echo -e "提示: 输入 realm-helper 可快速启动本脚本"
     echo -e "################################################"
     echo -e " 1. 下载并安装 / 更新 Realm"
     echo -e " 2. 添加转发规则"
@@ -410,9 +459,10 @@ main_menu() {
     echo -e " 8. 重启服务 (restart)"
     echo -e "------------------------------------------------"
     echo -e " 9. 卸载 Realm"
+    echo -e " 99. 更新本脚本"
     echo -e " 0. 退出脚本"
     echo -e "################################################"
-    read -p "请输入数字 [0-9]: " num
+    read -p "请输入数字: " num
 
     case "$num" in
         1) install_realm ;;
@@ -424,11 +474,13 @@ main_menu() {
         7) manage_service stop ;;
         8) manage_service restart ;;
         9) uninstall_realm ;;
-        0) exit 0 ;;
+        99) update_script ;;
+        0) echo -e "${GREEN}谢谢使用本脚本，再见。${PLAIN}"; exit 0 ;;
         *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; main_menu ;;
     esac
 }
 
 # 脚本入口
 check_dependencies
+check_shortcut
 main_menu
