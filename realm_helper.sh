@@ -135,6 +135,10 @@ install_realm() {
 
     DOWNLOAD_URL="https://github.com/zhboner/realm/releases/download/${LATEST_TAG}/realm-${REALM_ARCH}-${REALM_OS}.tar.gz"
     
+    # 清理旧文件防止冲突
+    rm -f /tmp/realm.tar.gz
+    rm -f /tmp/realm
+
     echo -e "${GREEN}正在下载: realm-${REALM_ARCH}-${REALM_OS}.tar.gz ...${PLAIN}"
     curl -L -o /tmp/realm.tar.gz "$DOWNLOAD_URL"
     
@@ -145,7 +149,14 @@ install_realm() {
     fi
 
     echo -e "${GREEN}正在安装...${PLAIN}"
-    tar -xzwf /tmp/realm.tar.gz -C /tmp
+    tar -xzvf /tmp/realm.tar.gz -C /tmp
+    
+    if [ ! -f "/tmp/realm" ]; then
+        echo -e "${RED}解压失败或文件不存在！请检查下载文件是否完整。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
     mv /tmp/realm "$REALM_BIN"
     chmod +x "$REALM_BIN"
     rm -f /tmp/realm.tar.gz
