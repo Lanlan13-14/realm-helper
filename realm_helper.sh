@@ -30,8 +30,9 @@ fi
 check_dependencies() {
     if [ "$IS_ALPINE" -eq 0 ]; then
         # Debian/Ubuntu
-        if ! command -v curl &> /dev/null || ! command -v tar &> /dev/null; then
-            apt-get update && apt-get install -y curl tar
+        # 增加检查 nano
+        if ! command -v curl &> /dev/null || ! command -v tar &> /dev/null || ! command -v nano &> /dev/null; then
+            apt-get update && apt-get install -y curl tar nano
         fi
     else
         # Alpine
@@ -41,17 +42,17 @@ check_dependencies() {
         if ! command -v tar &> /dev/null; then
             apk add tar
         fi
+        if ! command -v nano &> /dev/null; then
+            apk add nano
+        fi
     fi
 }
 
 # 检查并安装快捷方式
 check_shortcut() {
-    # 如果快捷方式不存在，或者当前运行的脚本不是快捷方式本身（确保更新逻辑能同步到快捷方式）
     if [ ! -f "$SHORTCUT_PATH" ] || [[ "$(realpath "$0")" != "$(realpath "$SHORTCUT_PATH")" ]]; then
         cp "$0" "$SHORTCUT_PATH"
         chmod +x "$SHORTCUT_PATH"
-        # 只有在首次创建时提示
-        # echo -e "${GREEN}快捷方式已添加！以后输入 realm-helper 即可启动本脚本。${PLAIN}"
     fi
 }
 
@@ -148,7 +149,6 @@ install_realm() {
 
     DOWNLOAD_URL="https://github.com/zhboner/realm/releases/download/${LATEST_TAG}/realm-${REALM_ARCH}-${REALM_OS}.tar.gz"
     
-    # 清理旧文件防止冲突
     rm -f /tmp/realm.tar.gz
     rm -f /tmp/realm
 
@@ -201,11 +201,9 @@ add_rule() {
     init_config
     echo -e "${YELLOW}=== 添加转发规则 ===${PLAIN}"
     
-    # 1. 监听 IP
     read -p "请输入监听 IP (默认 0.0.0.0): " listen_ip
     [[ -z "$listen_ip" ]] && listen_ip="0.0.0.0"
 
-    # 2. 监听端口
     read -p "请输入监听端口 (必填): " listen_port
     if [[ -z "$listen_port" ]]; then
         echo -e "${RED}错误：监听端口不能为空，退出操作。${PLAIN}"
@@ -213,20 +211,17 @@ add_rule() {
         return
     fi
 
-    # 检查端口是否重复
     if grep -q "listen = \"$listen_ip:$listen_port\"" "$CONFIG_FILE" || grep -q "listen = \".*:$listen_port\"" "$CONFIG_FILE"; then
         echo -e "${RED}错误：该端口已在配置文件中存在，退出脚本。${PLAIN}"
         exit 1
     fi
 
-    # 3. 目标 IP
     read -p "请输入转发目标 IP (必填): " remote_ip
     if [[ -z "$remote_ip" ]]; then
         echo -e "${RED}错误：目标 IP 不能为空，退出脚本。${PLAIN}"
         exit 1
     fi
 
-    # 4. 目标端口
     read -p "请输入转发目标端口 (必填): " remote_port
     if [[ -z "$remote_port" ]]; then
         echo -e "${RED}错误：目标端口 不能为空，退出脚本。${PLAIN}"
@@ -242,7 +237,7 @@ EOF
 
     echo -e "${GREEN}规则添加成功！${PLAIN}"
     echo -e "已添加: $listen_ip:$listen_port -> $remote_ip:$remote_port"
-    echo -e "${YELLOW}注意：请重启 Realm 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 9) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -259,6 +254,18 @@ view_rules() {
     echo "--------------------------------"
     awk '/\[\[endpoints\]\]/{flag=1; next} flag && /listen/{l=$3} flag && /remote/{r=$3; print l " -> " r; flag=0}' "$CONFIG_FILE" | tr -d '"'
     echo "--------------------------------"
+    wait_for_key
+}
+
+# 修改现有转发规则
+edit_rule() {
+    init_config
+    echo -e "${GREEN}正在打开配置文件...${PLAIN}"
+    echo -e "${YELLOW}提示：修改完成后，按 Ctrl+O 保存，Enter 确认，然后按 Ctrl+X 退出。${PLAIN}"
+    sleep 2
+    nano "$CONFIG_FILE"
+    echo -e "${GREEN}修改完成。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 9) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -405,7 +412,6 @@ uninstall_realm() {
 # 更新脚本
 update_script() {
     echo -e "${GREEN}正在检查脚本更新...${PLAIN}"
-    # 下载到临时文件
     curl -L -o /tmp/realm_helper_new.sh "$UPDATE_URL"
     if [ $? -ne 0 ]; then
         echo -e "${RED}更新失败，无法连接到 GitHub。${PLAIN}"
@@ -413,7 +419,6 @@ update_script() {
         return
     fi
 
-    # 简单检查文件有效性
     if ! grep -q "#!/bin/bash" /tmp/realm_helper_new.sh; then
         echo -e "${RED}下载的文件无效，请检查 URL 或网络。${PLAIN}"
         rm -f /tmp/realm_helper_new.sh
@@ -421,11 +426,9 @@ update_script() {
         return
     fi
 
-    # 覆盖当前脚本
     mv /tmp/realm_helper_new.sh "$0"
     chmod +x "$0"
     
-    # 同时也更新快捷方式（如果当前运行的不是快捷方式）
     if [[ "$(realpath "$0")" != "$(realpath "$SHORTCUT_PATH")" ]]; then
         cp "$0" "$SHORTCUT_PATH"
         chmod +x "$SHORTCUT_PATH"
@@ -451,14 +454,15 @@ main_menu() {
     echo -e " 1. 下载并安装 / 更新 Realm"
     echo -e " 2. 添加转发规则"
     echo -e " 3. 查看现有转发规则"
+    echo -e " 4. 修改现有转发规则 (nano)"
     echo -e "------------------------------------------------"
-    echo -e " 4. 设置开机自启 (enable)"
-    echo -e " 5. 取消开机自启 (disable)"
-    echo -e " 6. 启动服务 (start)"
-    echo -e " 7. 停止服务 (stop)"
-    echo -e " 8. 重启服务 (restart)"
+    echo -e " 5. 设置开机自启 (enable)"
+    echo -e " 6. 取消开机自启 (disable)"
+    echo -e " 7. 启动服务 (start)"
+    echo -e " 8. 停止服务 (stop)"
+    echo -e " 9. 重启服务 (restart)"
     echo -e "------------------------------------------------"
-    echo -e " 9. 卸载 Realm"
+    echo -e " 10. 卸载 Realm"
     echo -e " 99. 更新本脚本"
     echo -e " 0. 退出脚本"
     echo -e "################################################"
@@ -468,12 +472,13 @@ main_menu() {
         1) install_realm ;;
         2) add_rule ;;
         3) view_rules ;;
-        4) manage_service enable ;;
-        5) manage_service disable ;;
-        6) manage_service start ;;
-        7) manage_service stop ;;
-        8) manage_service restart ;;
-        9) uninstall_realm ;;
+        4) edit_rule ;;
+        5) manage_service enable ;;
+        6) manage_service disable ;;
+        7) manage_service start ;;
+        8) manage_service stop ;;
+        9) manage_service restart ;;
+        10) uninstall_realm ;;
         99) update_script ;;
         0) echo -e "${GREEN}谢谢使用本脚本，再见。${PLAIN}"; exit 0 ;;
         *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; main_menu ;;
