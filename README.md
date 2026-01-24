@@ -1,5 +1,5 @@
 # realm-helper
-A easy-to-use realm port forwarding tool. 
+A easy-to-use Realm port forwarding tool. 
 
 To use this tool, simply run:
 
