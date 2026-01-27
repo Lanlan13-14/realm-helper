@@ -7,6 +7,12 @@ To use this tool, simply run:
 curl -L https://raw.githubusercontent.com/RomanovCaesar/realm-helper/main/realm_helper.sh -o realm_helper.sh && chmod +x realm_helper.sh && sudo ./realm_helper.sh
 ```
 
+Then you can access this tool by entering:
+
+```bash
+realm-helper
+```
+
 This script has the following functions:
 
 1. After the script runs, a menu will be displayed. Entering numbers will allow you to perform various operations.
