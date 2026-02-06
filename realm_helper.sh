@@ -238,7 +238,7 @@ EOF
 
     echo -e "${GREEN}规则添加成功！${PLAIN}"
     echo -e "已添加: $listen_ip:$listen_port -> $remote_ip:$remote_port"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 9) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 10) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -266,7 +266,7 @@ edit_rule() {
     sleep 2
     nano "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 9) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 10) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -355,7 +355,7 @@ delete_rule() {
     sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' "$CONFIG_FILE"
 
     echo -e "${GREEN}规则 $choice 已删除。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 9) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 10) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
