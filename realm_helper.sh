@@ -641,8 +641,8 @@ main_menu() {
     clear
     get_status
     echo -e "################################################"
-    echo -e "#          Caesar 蜜汁 Realm 管理脚本            #"
-    echo -e "#            系统: ${SYS_TYPE}        #"
+    echo -e "#          Caesar 蜜汁 Realm 管理脚本           #"
+    echo -e "#          系统: ${SYS_TYPE}        #"
     echo -e "################################################"
     echo -e "Realm 安装状态: ${INSTALL_STATUS}"
     echo -e "Realm 运行状态: ${RUN_STATUS}"
