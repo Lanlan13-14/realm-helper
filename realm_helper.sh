@@ -30,7 +30,7 @@ fi
 check_dependencies() {
     if [ "$IS_ALPINE" -eq 0 ]; then
         # Debian/Ubuntu
-        # 增加检查 nano, grep, gawk (debian通常自带awk但以防万一)
+        # 增加检查 nano, grep, gawk
         if ! command -v curl &> /dev/null || ! command -v tar &> /dev/null || ! command -v nano &> /dev/null; then
             apt-get update && apt-get install -y curl tar nano grep
         fi
@@ -45,7 +45,6 @@ check_dependencies() {
         if ! command -v nano &> /dev/null; then
             apk add nano
         fi
-        # Alpine 自带的 grep 和 awk (busybox) 通常够用
     fi
 }
 
@@ -238,7 +237,7 @@ EOF
 
     echo -e "${GREEN}规则添加成功！${PLAIN}"
     echo -e "已添加: $listen_ip:$listen_port -> $remote_ip:$remote_port"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 10) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -258,15 +257,134 @@ view_rules() {
     wait_for_key
 }
 
+# 快速修改转发规则 (Wizard)
+quick_edit_rule() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${YELLOW}配置文件不存在。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    echo -e "${YELLOW}=== 快速修改转发规则 ===${PLAIN}"
+    
+    # 1. 列出规则供选择
+    line_numbers=($(grep -n "^\[\[endpoints\]\]" "$CONFIG_FILE" | cut -d: -f1))
+    total=${#line_numbers[@]}
+
+    if [ $total -eq 0 ]; then
+        echo -e "${RED}没有发现任何转发规则。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    echo "当前共有 $total 条规则："
+    local i=1
+    for ln in "${line_numbers[@]}"; do
+        info=$(awk -v n=$i '
+            BEGIN { count=0; }
+            /^\[\[endpoints\]\]/ { count++; }
+            count==n {
+                if ($1 == "listen") l=$3;
+                if ($1 == "remote") r=$3;
+            }
+            count > n { exit; }
+            END { 
+                gsub(/"/, "", l); gsub(/"/, "", r);
+                if (l && r) print l " -> " r;
+            }
+        ' "$CONFIG_FILE")
+        
+        echo -e "${GREEN}$i.${PLAIN} $info"
+        ((i++))
+    done
+    echo -e "--------------------------------"
+
+    read -p "请输入要修改的规则序号 (输入 0 取消): " choice
+
+    if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}输入无效。${PLAIN}"
+        wait_for_key
+        return
+    fi
+    if [ "$choice" -eq 0 ]; then main_menu; return; fi
+    if [ "$choice" -lt 1 ] || [ "$choice" -gt "$total" ]; then
+        echo -e "${RED}序号超出范围。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    # 2. 提取旧数据
+    idx=$((choice - 1))
+    start_line=${line_numbers[$idx]}
+    next_section_line=$(awk -v start="$start_line" 'NR > start && /^\[/ { print NR; exit }' "$CONFIG_FILE")
+    
+    # 读取这块内容
+    if [ -z "$next_section_line" ]; then
+        block_content=$(sed -n "${start_line},\$p" "$CONFIG_FILE")
+        end_line_for_del="" # 标记删到最后
+    else
+        end_line=$((next_section_line - 1))
+        block_content=$(sed -n "${start_line},${end_line}p" "$CONFIG_FILE")
+        end_line_for_del="$end_line"
+    fi
+
+    # 提取 IP 和 端口 (利用 grep 和 rev cut)
+    full_listen=$(echo "$block_content" | grep "listen =" | cut -d'"' -f2)
+    full_remote=$(echo "$block_content" | grep "remote =" | cut -d'"' -f2)
+
+    # 分离 IP 和 Port (rev是为了从后面切分，防止IPv6干扰，虽然realm config一般不用ipv6方括号，但这样稳妥)
+    old_l_port=$(echo "$full_listen" | rev | cut -d: -f1 | rev)
+    old_l_ip=$(echo "$full_listen" | rev | cut -d: -f2- | rev)
+    old_r_port=$(echo "$full_remote" | rev | cut -d: -f1 | rev)
+    old_r_ip=$(echo "$full_remote" | rev | cut -d: -f2- | rev)
+
+    echo -e "${YELLOW}请逐项输入新值 (直接回车保持原值):${PLAIN}"
+
+    # 3. 询问新参数
+    read -p "监听 IP [当前: $old_l_ip]: " new_l_ip
+    [[ -z "$new_l_ip" ]] && new_l_ip="$old_l_ip"
+    
+    read -p "监听 端口 [当前: $old_l_port]: " new_l_port
+    [[ -z "$new_l_port" ]] && new_l_port="$old_l_port"
+
+    read -p "目标 IP [当前: $old_r_ip]: " new_r_ip
+    [[ -z "$new_r_ip" ]] && new_r_ip="$old_r_ip"
+
+    read -p "目标 端口 [当前: $old_r_port]: " new_r_port
+    [[ -z "$new_r_port" ]] && new_r_port="$old_r_port"
+
+    # 4. 执行修改 (删除旧的 -> 写入新的)
+    if [ -z "$end_line_for_del" ]; then
+        sed -i "${start_line},\$d" "$CONFIG_FILE"
+    else
+        sed -i "${start_line},${end_line_for_del}d" "$CONFIG_FILE"
+    fi
+
+    cat >> "$CONFIG_FILE" <<EOF
+
+[[endpoints]]
+listen = "$new_l_ip:$new_l_port"
+remote = "$new_r_ip:$new_r_port"
+EOF
+    
+    # 清理多余空行
+    sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' "$CONFIG_FILE"
+
+    echo -e "${GREEN}规则修改成功！${PLAIN}"
+    echo -e "新规则: $new_l_ip:$new_l_port -> $new_r_ip:$new_r_port"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
+    wait_for_key
+}
+
 # 修改现有转发规则 (nano)
-edit_rule() {
+edit_rule_nano() {
     init_config
     echo -e "${GREEN}正在打开配置文件...${PLAIN}"
     echo -e "${YELLOW}提示：修改完成后，按 Ctrl+O 保存，Enter 确认，然后按 Ctrl+X 退出。${PLAIN}"
     sleep 2
     nano "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 10) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -280,7 +398,6 @@ delete_rule() {
 
     echo -e "${YELLOW}=== 删除转发规则 ===${PLAIN}"
     
-    # 获取所有 [[endpoints]] 的起始行号
     line_numbers=($(grep -n "^\[\[endpoints\]\]" "$CONFIG_FILE" | cut -d: -f1))
     total=${#line_numbers[@]}
 
@@ -290,11 +407,9 @@ delete_rule() {
         return
     fi
 
-    # 列出带序号的规则
     echo "当前共有 $total 条规则："
     local i=1
     for ln in "${line_numbers[@]}"; do
-        # 使用 awk 精确提取该块的 listen 和 remote (处理双引号)
         info=$(awk -v n=$i '
             BEGIN { count=0; }
             /^\[\[endpoints\]\]/ { count++; }
@@ -316,7 +431,6 @@ delete_rule() {
     echo -e "--------------------------------"
     read -p "请输入要删除的规则序号 (输入 0 取消): " choice
 
-    # 验证输入
     if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
         echo -e "${RED}输入无效，请输入数字。${PLAIN}"
         wait_for_key
@@ -334,28 +448,21 @@ delete_rule() {
         return
     fi
 
-    # 计算删除范围
     idx=$((choice - 1))
     start_line=${line_numbers[$idx]}
-    
-    # 查找下一节的开始位置（无论是下一个 endpoints 还是其他 [section]）
-    # 从 start_line 的下一行开始找第一个以 [ 开头的行
     next_section_line=$(awk -v start="$start_line" 'NR > start && /^\[/ { print NR; exit }' "$CONFIG_FILE")
     
     if [ -z "$next_section_line" ]; then
-        # 如果没有下一节，说明是最后一条，直接删到文件末尾
         sed -i "${start_line},\$d" "$CONFIG_FILE"
     else
-        # 如果有下一节，删到下一节的前一行
         end_line=$((next_section_line - 1))
         sed -i "${start_line},${end_line}d" "$CONFIG_FILE"
     fi
     
-    # 简单的空行清理（删除文件末尾多余空行，非必须但美观）
     sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' "$CONFIG_FILE"
 
     echo -e "${GREEN}规则 $choice 已删除。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 10) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -534,7 +641,7 @@ main_menu() {
     clear
     get_status
     echo -e "################################################"
-    echo -e "#              Realm 管理脚本                  #"
+    echo -e "#          Caesar 蜜汁 Realm 管理脚本            #"
     echo -e "#            系统: ${SYS_TYPE}        #"
     echo -e "################################################"
     echo -e "Realm 安装状态: ${INSTALL_STATUS}"
@@ -544,16 +651,17 @@ main_menu() {
     echo -e " 1. 下载并安装 / 更新 Realm"
     echo -e " 2. 添加转发规则"
     echo -e " 3. 查看现有转发规则"
-    echo -e " 4. 修改现有转发规则 (nano)"
-    echo -e " 5. 删除转发规则 (按序号)"
+    echo -e " 4. 快速修改转发规则 (向导)"
+    echo -e " 5. 修改现有转发规则 (nano)"
+    echo -e " 6. 删除转发规则"
     echo -e "------------------------------------------------"
-    echo -e " 6. 设置开机自启 (enable)"
-    echo -e " 7. 取消开机自启 (disable)"
-    echo -e " 8. 启动服务 (start)"
-    echo -e " 9. 停止服务 (stop)"
-    echo -e " 10. 重启服务 (restart)"
+    echo -e " 7. 设置开机自启 (enable)"
+    echo -e " 8. 取消开机自启 (disable)"
+    echo -e " 9. 启动服务 (start)"
+    echo -e " 10. 停止服务 (stop)"
+    echo -e " 11. 重启服务 (restart)"
     echo -e "------------------------------------------------"
-    echo -e " 11. 卸载 Realm"
+    echo -e " 12. 卸载 Realm"
     echo -e " 99. 更新本脚本"
     echo -e " 0. 退出脚本"
     echo -e "################################################"
@@ -563,14 +671,15 @@ main_menu() {
         1) install_realm ;;
         2) add_rule ;;
         3) view_rules ;;
-        4) edit_rule ;;
-        5) delete_rule ;;
-        6) manage_service enable ;;
-        7) manage_service disable ;;
-        8) manage_service start ;;
-        9) manage_service stop ;;
-        10) manage_service restart ;;
-        11) uninstall_realm ;;
+        4) quick_edit_rule ;;
+        5) edit_rule_nano ;;
+        6) delete_rule ;;
+        7) manage_service enable ;;
+        8) manage_service disable ;;
+        9) manage_service start ;;
+        10) manage_service stop ;;
+        11) manage_service restart ;;
+        12) uninstall_realm ;;
         99) update_script ;;
         0) echo -e "${GREEN}谢谢使用本脚本，再见。${PLAIN}"; exit 0 ;;
         *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; main_menu ;;
