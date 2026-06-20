@@ -422,13 +422,39 @@ EOF
     wait_for_key
 }
 
-# 修改现有转发规则 (nano)
-edit_rule_nano() {
+# 修改配置文件
+edit_config() {
     init_config
-    echo -e "${GREEN}正在打开配置文件...${PLAIN}"
-    echo -e "${YELLOW}提示：修改完成后，按 Ctrl+O 保存，Enter 确认，然后按 Ctrl+X 退出。${PLAIN}"
-    sleep 2
-    nano "$CONFIG_FILE"
+    echo -e "${YELLOW}=== 选择编辑器 ===${PLAIN}"
+    echo -e "  ${GREEN}1.${PLAIN} 使用 nano 编辑 (简单易用)"
+    echo -e "  ${GREEN}2.${PLAIN} 使用 vim 编辑 (功能强大)"
+    echo -e "  ${GREEN}0.${PLAIN} 返回主菜单"
+    read -p "请输入数字: " editor_choice
+
+    case "$editor_choice" in
+        1)
+            echo -e "${GREEN}正在使用 nano 编辑配置文件...${PLAIN}"
+            echo -e "${YELLOW}提示：修改完成后，按 Ctrl+O 保存，Enter 确认，然后按 Ctrl+X 退出。${PLAIN}"
+            sleep 1
+            nano "$CONFIG_FILE"
+            ;;
+        2)
+            echo -e "${GREEN}正在使用 vim 编辑配置文件...${PLAIN}"
+            echo -e "${YELLOW}提示：修改完成后，按 Esc 输入 :wq 保存退出，:q! 不保存退出。${PLAIN}"
+            sleep 1
+            vim -u NONE "$CONFIG_FILE"
+            ;;
+        0|"")
+            main_menu
+            return
+            ;;
+        *)
+            echo -e "${RED}输入无效，返回主菜单。${PLAIN}"
+            wait_for_key
+            return
+            ;;
+    esac
+
     echo -e "${GREEN}修改完成。${PLAIN}"
     echo -e "${YELLOW}注意：请重启 Realm (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
@@ -901,7 +927,7 @@ main_menu() {
     echo -e " 2. 添加转发规则"
     echo -e " 3. 查看现有转发规则"
     echo -e " 4. 快速修改转发规则 (向导)"
-    echo -e " 5. 修改现有转发规则 (nano)"
+    echo -e " 5. 修改配置文件 (选择编辑器)"
     echo -e " 6. DNS 设置"
     echo -e " 7. 删除转发规则"
     echo -e "------------------------------------------------"
@@ -922,7 +948,7 @@ main_menu() {
         2) add_rule ;;
         3) view_rules ;;
         4) quick_edit_rule ;;
-        5) edit_rule_nano ;;
+        5) edit_config ;;
         6) dns_settings ;;
         7) delete_rule ;;
         8) manage_service enable ;;
