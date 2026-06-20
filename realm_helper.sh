@@ -228,8 +228,16 @@ add_rule() {
         exit 1
     fi
 
+    read -p "请输入备注 (可选，显示为 #备注): " remark
+
     cat >> "$CONFIG_FILE" <<EOF
 
+EOF
+    # 有备注才写入备注行
+    if [ -n "$remark" ]; then
+        echo "# 备注: $remark" >> "$CONFIG_FILE"
+    fi
+    cat >> "$CONFIG_FILE" <<EOF
 [[endpoints]]
 listen = "$listen_ip:$listen_port"
 remote = "$remote_ip:$remote_port"
@@ -237,7 +245,7 @@ EOF
 
     echo -e "${GREEN}规则添加成功！${PLAIN}"
     echo -e "已添加: $listen_ip:$listen_port -> $remote_ip:$remote_port"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -250,9 +258,23 @@ view_rules() {
     fi
 
     echo -e "${YELLOW}=== 现有转发规则 ===${PLAIN}"
-    echo -e "格式: 监听地址 -> 目标地址"
+    echo -e "格式: 监听地址 -> 目标地址  #备注"
     echo "--------------------------------"
-    awk '/\[\[endpoints\]\]/{flag=1; next} flag && /listen/{l=$3} flag && /remote/{r=$3; print l " -> " r; flag=0}' "$CONFIG_FILE" | tr -d '"'
+    awk '
+        BEGIN { remark=""; f=0; l=""; r="" }
+        /^# 备注:[[:space:]]/ {
+            if (match($0, /^# 备注:[[:space:]]*/)) remark = substr($0, RSTART+RLENGTH)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", remark); next
+        }
+        /^\[\[endpoints\]\]/ { f=1; next }
+        f && /listen/ { l=$3 }
+        f && /remote/ {
+            r=$3; gsub(/"/,"",l); gsub(/"/,"",r);
+            if (remark) printf "%s -> %s  #%s\n", l, r, remark;
+            else printf "%s -> %s\n", l, r;
+            f=0; remark=""; l=""; r=""
+        }
+    ' "$CONFIG_FILE"
     echo "--------------------------------"
     wait_for_key
 }
@@ -281,16 +303,27 @@ quick_edit_rule() {
     local i=1
     for ln in "${line_numbers[@]}"; do
         info=$(awk -v n=$i '
-            BEGIN { count=0; }
-            /^\[\[endpoints\]\]/ { count++; }
-            count==n {
-                if ($1 == "listen") l=$3;
-                if ($1 == "remote") r=$3;
+            BEGIN { count=0; remark=""; l=""; r="" }
+            /^# 备注:[[:space:]]/ {
+                if (count < n) {
+                    if (match($0, /^# 备注:[[:space:]]*/)) remark = substr($0, RSTART+RLENGTH)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", remark)
+                }
+                next
             }
-            count > n { exit; }
-            END { 
+            /^\[\[endpoints\]\]/ {
+                count++; if (count > n) exit
+                if (count < n) remark = ""
+                next
+            }
+            count == n && /listen/ { l=$3 }
+            count == n && /remote/ { r=$3 }
+            END {
                 gsub(/"/, "", l); gsub(/"/, "", r);
-                if (l && r) print l " -> " r;
+                if (l && r) {
+                    if (remark) printf "%s -> %s  #%s", l, r, remark;
+                    else printf "%s -> %s", l, r;
+                }
             }
         ' "$CONFIG_FILE")
         
@@ -318,7 +351,11 @@ quick_edit_rule() {
     start_line=${line_numbers[$idx]}
     next_section_line=$(awk -v start="$start_line" 'NR > start && /^\[/ { print NR; exit }' "$CONFIG_FILE")
     
-    # 读取这块内容
+    # 读取整块内容（含前一行备注）
+    remark_line=$((start_line - 1))
+    old_remark=$(sed -n "${remark_line}p" "$CONFIG_FILE" | grep "^# 备注:" | sed 's/^# 备注:[[:space:]]*//')
+    [ -z "$old_remark" ] && old_remark=""
+
     if [ -z "$next_section_line" ]; then
         block_content=$(sed -n "${start_line},\$p" "$CONFIG_FILE")
         end_line_for_del="" # 标记删到最后
@@ -353,6 +390,9 @@ quick_edit_rule() {
     read -p "目标 端口 [当前: $old_r_port]: " new_r_port
     [[ -z "$new_r_port" ]] && new_r_port="$old_r_port"
 
+    read -p "备注 [当前: ${old_remark:-无}]: " new_remark
+    [ -z "$new_remark" ] && new_remark="$old_remark"
+
     # 4. 执行修改 (删除旧的 -> 写入新的)
     if [ -z "$end_line_for_del" ]; then
         sed -i "${start_line},\$d" "$CONFIG_FILE"
@@ -362,6 +402,12 @@ quick_edit_rule() {
 
     cat >> "$CONFIG_FILE" <<EOF
 
+EOF
+    # 有备注才写入备注行
+    if [ -n "$new_remark" ]; then
+        echo "# 备注: $new_remark" >> "$CONFIG_FILE"
+    fi
+    cat >> "$CONFIG_FILE" <<EOF
 [[endpoints]]
 listen = "$new_l_ip:$new_l_port"
 remote = "$new_r_ip:$new_r_port"
@@ -372,7 +418,7 @@ EOF
 
     echo -e "${GREEN}规则修改成功！${PLAIN}"
     echo -e "新规则: $new_l_ip:$new_l_port -> $new_r_ip:$new_r_port"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -384,7 +430,194 @@ edit_rule_nano() {
     sleep 2
     nano "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 12) 使配置生效。${PLAIN}"
+    wait_for_key
+}
+
+# DNS 设置
+dns_settings() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${YELLOW}配置文件不存在，请先添加转发规则。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    echo -e "${YELLOW}=== DNS 设置 ===${PLAIN}"
+    echo -e "全部参数直接回车保持当前值（首次配置使用默认值）"
+    echo ""
+
+    # 读取当前 [dns] 节的行号
+    dns_line=$(grep -n "^\[dns\]" "$CONFIG_FILE" | head -1 | cut -d: -f1)
+    if [ -z "$dns_line" ]; then
+        # [dns] 不存在，追加
+        dns_line=$(wc -l < "$CONFIG_FILE")
+        dns_line=$((dns_line + 1))
+        append=1
+    else
+        append=0
+        # 找到下一个节的行号
+        next_section=$(awk -v start="$dns_line" 'NR > start && /^\[[a-z]+\]/ { print NR; exit }' "$CONFIG_FILE")
+    fi
+
+    # 读取当前值（仅识别未注释的行）
+    dns_mode_default="ipv4_and_ipv6"
+    dns_protocol_default="tcp_and_udp"
+    dns_ns_default='1.1.1.1:53, 8.8.8.8:53'
+    dns_min_ttl_default=0
+    dns_max_ttl_default=86400
+    dns_cache_size_default=0
+
+    if [ "$append" -eq 0 ]; then
+        cur_mode=$(awk -v start="$dns_line" -v end="$next_section" '
+            NR > start && (end == "" || NR < end) && /^[[:space:]]*mode[[:space:]]*=/ {
+                gsub(/.*=[[:space:]]*"?/,""); gsub(/"?[[:space:]]*$/,""); print; exit
+            }
+        ' "$CONFIG_FILE")
+        cur_protocol=$(awk -v start="$dns_line" -v end="$next_section" '
+            NR > start && (end == "" || NR < end) && /^[[:space:]]*protocol[[:space:]]*=/ {
+                gsub(/.*=[[:space:]]*"?/,""); gsub(/"?[[:space:]]*$/,""); print; exit
+            }
+        ' "$CONFIG_FILE")
+        # nameservers: 解析 ["a", "b"] → a, b
+        cur_ns_raw=$(awk -v start="$dns_line" -v end="$next_section" '
+            NR > start && (end == "" || NR < end) && /^[[:space:]]*nameservers[[:space:]]*=/ {
+                gsub(/.*=[[:space:]]*\[?/,""); gsub(/\]?[[:space:]]*$/,""); print; exit
+            }
+        ' "$CONFIG_FILE")
+        if [ -n "$cur_ns_raw" ]; then
+            cur_ns=$(echo "$cur_ns_raw" | sed 's/" *, */, /g; s/"//g')
+        fi
+        cur_min_ttl=$(awk -v start="$dns_line" -v end="$next_section" '
+            NR > start && (end == "" || NR < end) && /^[[:space:]]*min_ttl[[:space:]]*=/ {
+                gsub(/.*=[[:space:]]*/,""); gsub(/[[:space:]].*/,""); print; exit
+            }
+        ' "$CONFIG_FILE")
+        cur_max_ttl=$(awk -v start="$dns_line" -v end="$next_section" '
+            NR > start && (end == "" || NR < end) && /^[[:space:]]*max_ttl[[:space:]]*=/ {
+                gsub(/.*=[[:space:]]*/,""); gsub(/[[:space:]].*/,""); print; exit
+            }
+        ' "$CONFIG_FILE")
+        cur_cache_size=$(awk -v start="$dns_line" -v end="$next_section" '
+            NR > start && (end == "" || NR < end) && /^[[:space:]]*cache_size[[:space:]]*=/ {
+                gsub(/.*=[[:space:]]*/,""); gsub(/[[:space:]].*/,""); print; exit
+            }
+        ' "$CONFIG_FILE")
+    fi
+
+    [ -z "$cur_mode" ] && cur_mode="$dns_mode_default"
+    [ -z "$cur_protocol" ] && cur_protocol="$dns_protocol_default"
+    [ -z "$cur_ns" ] && cur_ns="$dns_ns_default"
+    [ -z "$cur_min_ttl" ] && cur_min_ttl="$dns_min_ttl_default"
+    [ -z "$cur_max_ttl" ] && cur_max_ttl="$dns_max_ttl_default"
+    [ -z "$cur_cache_size" ] && cur_cache_size="$dns_cache_size_default"
+
+    echo -e "当前 mode: ${GREEN}$cur_mode${PLAIN}"
+    echo ""
+    echo "请选择 mode:"
+    echo -e "  ${GREEN}1.${PLAIN} ipv4_only"
+    echo -e "  ${GREEN}2.${PLAIN} ipv6_only"
+    echo -e "  ${GREEN}3.${PLAIN} ipv4_then_ipv6"
+    echo -e "  ${GREEN}4.${PLAIN} ipv6_then_ipv4"
+    echo -e "  ${GREEN}5.${PLAIN} ipv4_and_ipv6"
+    echo -e "  ${GREEN}0.${PLAIN} 保持当前值 ($cur_mode)"
+    read -p "请输入数字: " mode_choice
+    case "$mode_choice" in
+        1) new_mode="ipv4_only" ;;
+        2) new_mode="ipv6_only" ;;
+        3) new_mode="ipv4_then_ipv6" ;;
+        4) new_mode="ipv6_then_ipv4" ;;
+        5) new_mode="ipv4_and_ipv6" ;;
+        0|"") new_mode="$cur_mode" ;;
+        *) echo -e "${RED}输入无效，保持当前值。${PLAIN}"; new_mode="$cur_mode" ;;
+    esac
+
+    echo ""
+    echo -e "当前 protocol: ${GREEN}$cur_protocol${PLAIN}"
+    echo ""
+    echo "请选择 protocol:"
+    echo -e "  ${GREEN}1.${PLAIN} tcp"
+    echo -e "  ${GREEN}2.${PLAIN} udp"
+    echo -e "  ${GREEN}3.${PLAIN} tcp_and_udp"
+    echo -e "  ${GREEN}0.${PLAIN} 保持当前值 ($cur_protocol)"
+    read -p "请输入数字: " proto_choice
+    case "$proto_choice" in
+        1) new_protocol="tcp" ;;
+        2) new_protocol="udp" ;;
+        3) new_protocol="tcp_and_udp" ;;
+        0|"") new_protocol="$cur_protocol" ;;
+        *) echo -e "${RED}输入无效，保持当前值。${PLAIN}"; new_protocol="$cur_protocol" ;;
+    esac
+
+    echo ""
+    echo -e "当前 nameservers: ${GREEN}$cur_ns${PLAIN}"
+    echo -e "    格式: server1:port, server2:port, ..."
+    read -p "请输入新值 [回车保持]: " new_ns
+    [ -z "$new_ns" ] && new_ns="$cur_ns"
+
+    echo ""
+    echo -e "当前 min_ttl: ${GREEN}$cur_min_ttl${PLAIN}"
+    echo -e "    DNS 正向缓存最小生存时间 (秒)"
+    read -p "请输入新值 [回车保持]: " new_min_ttl
+    [ -z "$new_min_ttl" ] && new_min_ttl="$cur_min_ttl"
+
+    echo ""
+    echo -e "当前 max_ttl: ${GREEN}$cur_max_ttl${PLAIN}"
+    echo -e "    DNS 正向缓存最大生存时间 (秒)"
+    read -p "请输入新值 [回车保持]: " new_max_ttl
+    [ -z "$new_max_ttl" ] && new_max_ttl="$cur_max_ttl"
+
+    echo ""
+    echo -e "当前 cache_size: ${GREEN}$cur_cache_size${PLAIN}"
+    echo -e "    DNS 缓存最大条目数"
+    read -p "请输入新值 [回车保持]: " new_cache_size
+    [ -z "$new_cache_size" ] && new_cache_size="$cur_cache_size"
+
+    # 将 nameservers 逗号分隔转为 TOML 数组格式: ["a", "b"]
+    toml_ns=$(echo "$new_ns" | awk -F, '{
+        for(i=1;i<=NF;i++) {
+            gsub(/^[[:space:]]*|[[:space:]]*$/, "", $i);
+            printf "%s\"%s\"", sep, $i; sep=", "
+        }
+    }')
+
+    # 构造新的 [dns] 块
+    new_dns_block=$(cat <<BLOCK
+[dns]
+mode = "$new_mode"
+protocol = "$new_protocol"
+nameservers = [$toml_ns]
+min_ttl = $new_min_ttl
+max_ttl = $new_max_ttl
+cache_size = $new_cache_size
+BLOCK
+)
+
+    if [ "$append" -eq 1 ]; then
+        # [dns] 不存在，追加到文件末尾
+        echo "" >> "$CONFIG_FILE"
+        echo "$new_dns_block" >> "$CONFIG_FILE"
+    else
+        # [dns] 存在，替换整节
+        tmpfile=$(mktemp)
+        {
+            # 在 [dns] 之前的内容
+            sed -n "1,$((dns_line - 1))p" "$CONFIG_FILE"
+            # 新的 [dns] 块
+            echo "$new_dns_block"
+            # 在 [dns] 之后的内容（从下一个节开始）
+            if [ -n "$next_section" ]; then
+                sed -n "${next_section},\$p" "$CONFIG_FILE"
+            fi
+        } > "$tmpfile"
+        mv "$tmpfile" "$CONFIG_FILE"
+    fi
+
+    # 清理多余空行
+    sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' "$CONFIG_FILE"
+
+    echo ""
+    echo -e "${GREEN}DNS 设置已更新！${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -411,16 +644,27 @@ delete_rule() {
     local i=1
     for ln in "${line_numbers[@]}"; do
         info=$(awk -v n=$i '
-            BEGIN { count=0; }
-            /^\[\[endpoints\]\]/ { count++; }
-            count==n {
-                if ($1 == "listen") l=$3;
-                if ($1 == "remote") r=$3;
+            BEGIN { count=0; remark=""; l=""; r="" }
+            /^# 备注:[[:space:]]/ {
+                if (count < n) {
+                    if (match($0, /^# 备注:[[:space:]]*/)) remark = substr($0, RSTART+RLENGTH)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", remark)
+                }
+                next
             }
-            count > n { exit; }
-            END { 
+            /^\[\[endpoints\]\]/ {
+                count++; if (count > n) exit
+                if (count < n) remark = ""
+                next
+            }
+            count == n && /listen/ { l=$3 }
+            count == n && /remote/ { r=$3 }
+            END {
                 gsub(/"/, "", l); gsub(/"/, "", r);
-                if (l && r) print l " -> " r;
+                if (l && r) {
+                    if (remark) printf "%s -> %s  #%s", l, r, remark;
+                    else printf "%s -> %s", l, r;
+                }
             }
         ' "$CONFIG_FILE")
         
@@ -450,6 +694,11 @@ delete_rule() {
 
     idx=$((choice - 1))
     start_line=${line_numbers[$idx]}
+    # 如果前一行是备注，一并删除
+    remark_line=$((start_line - 1))
+    remark_check=$(sed -n "${remark_line}p" "$CONFIG_FILE" | grep "^# 备注:")
+    [ -n "$remark_check" ] && start_line=$remark_line
+
     next_section_line=$(awk -v start="$start_line" 'NR > start && /^\[/ { print NR; exit }' "$CONFIG_FILE")
     
     if [ -z "$next_section_line" ]; then
@@ -462,7 +711,7 @@ delete_rule() {
     sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' "$CONFIG_FILE"
 
     echo -e "${GREEN}规则 $choice 已删除。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启 Realm (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启 Realm (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -653,15 +902,16 @@ main_menu() {
     echo -e " 3. 查看现有转发规则"
     echo -e " 4. 快速修改转发规则 (向导)"
     echo -e " 5. 修改现有转发规则 (nano)"
-    echo -e " 6. 删除转发规则"
+    echo -e " 6. DNS 设置"
+    echo -e " 7. 删除转发规则"
     echo -e "------------------------------------------------"
-    echo -e " 7. 设置开机自启 (enable)"
-    echo -e " 8. 取消开机自启 (disable)"
-    echo -e " 9. 启动服务 (start)"
-    echo -e " 10. 停止服务 (stop)"
-    echo -e " 11. 重启服务 (restart)"
+    echo -e " 8. 设置开机自启 (enable)"
+    echo -e " 9. 取消开机自启 (disable)"
+    echo -e " 10. 启动服务 (start)"
+    echo -e " 11. 停止服务 (stop)"
+    echo -e " 12. 重启服务 (restart)"
     echo -e "------------------------------------------------"
-    echo -e " 12. 卸载 Realm"
+    echo -e " 13. 卸载 Realm"
     echo -e " 99. 更新本脚本"
     echo -e " 0. 退出脚本"
     echo -e "################################################"
@@ -673,13 +923,14 @@ main_menu() {
         3) view_rules ;;
         4) quick_edit_rule ;;
         5) edit_rule_nano ;;
-        6) delete_rule ;;
-        7) manage_service enable ;;
-        8) manage_service disable ;;
-        9) manage_service start ;;
-        10) manage_service stop ;;
-        11) manage_service restart ;;
-        12) uninstall_realm ;;
+        6) dns_settings ;;
+        7) delete_rule ;;
+        8) manage_service enable ;;
+        9) manage_service disable ;;
+        10) manage_service start ;;
+        11) manage_service stop ;;
+        12) manage_service restart ;;
+        13) uninstall_realm ;;
         99) update_script ;;
         0) echo -e "${GREEN}谢谢使用本脚本，再见。${PLAIN}"; exit 0 ;;
         *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; main_menu ;;
